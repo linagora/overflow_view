@@ -20,18 +20,23 @@ class OverflowView extends MultiChildRenderObjectWidget {
   /// All children will have the same size has the first child.
   ///
   /// The [spacing] argument must also be positive and finite.
+  ///
+  /// If [reverse] is true, the overflow will occur from the start (left for
+  /// horizontal, top for vertical) instead of the end.
   OverflowView({
     Key? key,
     required OverflowIndicatorBuilder builder,
     Axis direction = Axis.horizontal,
     required List<Widget> children,
     double spacing = 0,
+    bool reverse = false,
   }) : this._all(
           key: key,
           builder: builder,
           direction: direction,
           children: children,
           spacing: spacing,
+          reverse: reverse,
           layoutBehavior: OverflowViewLayoutBehavior.fixed,
         );
 
@@ -40,18 +45,23 @@ class OverflowView extends MultiChildRenderObjectWidget {
   /// All children can have their own size.
   ///
   /// The [spacing] argument must also be positive and finite.
+  ///
+  /// If [reverse] is true, the overflow will occur from the start (left for
+  /// horizontal, top for vertical) instead of the end.
   OverflowView.flexible({
     Key? key,
     required OverflowIndicatorBuilder builder,
     Axis direction = Axis.horizontal,
     required List<Widget> children,
     double spacing = 0,
+    bool reverse = false,
   }) : this._all(
           key: key,
           builder: builder,
           direction: direction,
           children: children,
           spacing: spacing,
+          reverse: reverse,
           layoutBehavior: OverflowViewLayoutBehavior.flexible,
         );
 
@@ -61,9 +71,9 @@ class OverflowView extends MultiChildRenderObjectWidget {
     this.direction = Axis.horizontal,
     required List<Widget> children,
     this.spacing = 0,
+    this.reverse = false,
     required OverflowViewLayoutBehavior layoutBehavior,
-  })  : assert(spacing > double.negativeInfinity &&
-            spacing < double.infinity),
+  })  : assert(spacing > double.negativeInfinity && spacing < double.infinity),
         _layoutBehavior = layoutBehavior,
         super(
           key: key,
@@ -86,6 +96,12 @@ class OverflowView extends MultiChildRenderObjectWidget {
   /// The amount of space between successive children.
   final double spacing;
 
+  /// Whether to reverse the direction of overflow.
+  ///
+  /// If true, overflow occurs from the start (left for horizontal, top for
+  /// vertical) instead of the end.
+  final bool reverse;
+
   final OverflowViewLayoutBehavior _layoutBehavior;
 
   @override
@@ -98,6 +114,7 @@ class OverflowView extends MultiChildRenderObjectWidget {
     return RenderOverflowView(
       direction: direction,
       spacing: spacing,
+      reverse: reverse,
       layoutBehavior: _layoutBehavior,
     );
   }
@@ -110,6 +127,7 @@ class OverflowView extends MultiChildRenderObjectWidget {
     renderObject
       ..direction = direction
       ..spacing = spacing
+      ..reverse = reverse
       ..layoutBehavior = _layoutBehavior;
   }
 }

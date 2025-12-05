@@ -21,10 +21,12 @@ class RenderOverflowView extends RenderBox
     List<RenderBox>? children,
     required Axis direction,
     required double spacing,
+    required bool reverse,
     required OverflowViewLayoutBehavior layoutBehavior,
   })  : assert(spacing > double.negativeInfinity && spacing < double.infinity),
         _direction = direction,
         _spacing = spacing,
+        _reverse = reverse,
         _layoutBehavior = layoutBehavior,
         _isHorizontal = direction == Axis.horizontal {
     addAll(children);
@@ -46,6 +48,15 @@ class RenderOverflowView extends RenderBox
     assert(value > double.negativeInfinity && value < double.infinity);
     if (_spacing != value) {
       _spacing = value;
+      markNeedsLayout();
+    }
+  }
+
+  bool get reverse => _reverse;
+  bool _reverse;
+  set reverse(bool value) {
+    if (_reverse != value) {
+      _reverse = value;
       markNeedsLayout();
     }
   }
@@ -140,41 +151,86 @@ class RenderOverflowView extends RenderBox
         ? count
         : (maxExtent + spacing) ~/ childStride - 1;
     final int unRenderedChildCount = count - renderedChildCount;
-    if (renderedChildCount > 0) {
-      childParentData.offstage = false;
-      onstageCount++;
-    }
 
-    for (int i = 1; i < renderedChildCount; i++) {
-      child = childParentData.nextSibling!;
-      childParentData = child.parentData as OverflowViewParentData;
-      child.layout(otherChildConstraints);
-      childParentData.offset = getChildOffset(i);
-      childParentData.offstage = false;
-      onstageCount++;
-    }
+    if (_reverse) {
+      // In reverse mode, hide first children and show last children
+      final int firstVisibleIndex = unRenderedChildCount;
 
-    while (child != lastChild) {
-      child = childParentData.nextSibling!;
-      childParentData = child.parentData as OverflowViewParentData;
-      childParentData.offstage = true;
-    }
+      // Skip hidden children efficiently - only mark them as offstage
+      int childIndex = 0;
+      while (childIndex < firstVisibleIndex && child != lastChild) {
+        childParentData.offstage = true;
+        child = childParentData.nextSibling!;
+        childParentData = child.parentData as OverflowViewParentData;
+        childIndex++;
+      }
 
-    if (unRenderedChildCount > 0) {
-      // We have to layout the overflow indicator.
-      final RenderBox overflowIndicator = lastChild!;
+      // Layout overflow indicator first if needed
+      if (unRenderedChildCount > 0) {
+        final RenderBox overflowIndicator = lastChild!;
+        final BoxValueConstraints<int> overflowIndicatorConstraints =
+            BoxValueConstraints<int>(
+          value: unRenderedChildCount,
+          constraints: otherChildConstraints,
+        );
+        overflowIndicator.layout(overflowIndicatorConstraints);
+        final OverflowViewParentData overflowIndicatorParentData =
+            overflowIndicator.parentData as OverflowViewParentData;
+        overflowIndicatorParentData.offset = getChildOffset(0);
+        overflowIndicatorParentData.offstage = false;
+        onstageCount++;
+      }
 
-      final BoxValueConstraints<int> overflowIndicatorConstraints =
-          BoxValueConstraints<int>(
-        value: unRenderedChildCount,
-        constraints: otherChildConstraints,
-      );
-      overflowIndicator.layout(overflowIndicatorConstraints);
-      final OverflowViewParentData overflowIndicatorParentData =
-          overflowIndicator.parentData as OverflowViewParentData;
-      overflowIndicatorParentData.offset = getChildOffset(renderedChildCount);
-      overflowIndicatorParentData.offstage = false;
-      onstageCount++;
+      // Layout only visible children
+      int visualIndex = unRenderedChildCount > 0 ? 1 : 0;
+      while (child != lastChild) {
+        child.layout(otherChildConstraints);
+        childParentData.offset = getChildOffset(visualIndex);
+        childParentData.offstage = false;
+        onstageCount++;
+
+        child = childParentData.nextSibling!;
+        childParentData = child.parentData as OverflowViewParentData;
+        visualIndex++;
+      }
+    } else {
+      // Normal mode: show first children, hide last children
+      if (renderedChildCount > 0) {
+        childParentData.offstage = false;
+        onstageCount++;
+      }
+
+      for (int i = 1; i < renderedChildCount; i++) {
+        child = childParentData.nextSibling!;
+        childParentData = child.parentData as OverflowViewParentData;
+        child.layout(otherChildConstraints);
+        childParentData.offset = getChildOffset(i);
+        childParentData.offstage = false;
+        onstageCount++;
+      }
+
+      while (child != lastChild) {
+        child = childParentData.nextSibling!;
+        childParentData = child.parentData as OverflowViewParentData;
+        childParentData.offstage = true;
+      }
+
+      if (unRenderedChildCount > 0) {
+        // We have to layout the overflow indicator.
+        final RenderBox overflowIndicator = lastChild!;
+
+        final BoxValueConstraints<int> overflowIndicatorConstraints =
+            BoxValueConstraints<int>(
+          value: unRenderedChildCount,
+          constraints: otherChildConstraints,
+        );
+        overflowIndicator.layout(overflowIndicatorConstraints);
+        final OverflowViewParentData overflowIndicatorParentData =
+            overflowIndicator.parentData as OverflowViewParentData;
+        overflowIndicatorParentData.offset = getChildOffset(renderedChildCount);
+        overflowIndicatorParentData.offstage = false;
+        onstageCount++;
+      }
     }
 
     final double mainAxisExtent = onstageCount * childStride - spacing;
@@ -186,6 +242,14 @@ class RenderOverflowView extends RenderBox
   }
 
   void performFlexibleLayout() {
+    if (_reverse) {
+      _performFlexibleLayoutReverse();
+    } else {
+      _performFlexibleLayoutNormal();
+    }
+  }
+
+  void _performFlexibleLayoutNormal() {
     RenderBox child = firstChild!;
     List<RenderBox> renderBoxes = <RenderBox>[];
     int unRenderedChildCount = childCount - 1;
@@ -329,6 +393,195 @@ class RenderOverflowView extends RenderBox
     size = constraints.constrain(idealSize);
   }
 
+  void _performFlexibleLayoutReverse() {
+    // First pass: layout all children in reverse to determine which ones fit
+    // Store layout info without using expensive insert(0) operations
+    final List<_ChildLayoutInfo> childrenInfo = <_ChildLayoutInfo>[];
+    RenderBox? child = firstChild;
+    int childIndex = 0;
+
+    // Build list of children (excluding overflow indicator) in forward order
+    while (child != null && child != lastChild) {
+      final OverflowViewParentData childParentData =
+          child.parentData as OverflowViewParentData;
+      childrenInfo.add(_ChildLayoutInfo(child, childIndex));
+      child = childParentData.nextSibling;
+      childIndex++;
+    }
+
+    List<RenderBox> visibleChildren = <RenderBox>[];
+    int unRenderedChildCount = childrenInfo.length;
+    double availableExtent =
+        _isHorizontal ? constraints.maxWidth : constraints.maxHeight;
+    final double maxCrossExtent =
+        _isHorizontal ? constraints.maxHeight : constraints.maxWidth;
+
+    final BoxConstraints childConstraints = _isHorizontal
+        ? BoxConstraints.loose(Size(double.infinity, maxCrossExtent))
+        : BoxConstraints.loose(Size(maxCrossExtent, double.infinity));
+
+    bool showOverflowIndicator = false;
+
+    // Layout children in reverse order (from end to start)
+    for (int i = childrenInfo.length - 1; i >= 0; i--) {
+      final _ChildLayoutInfo info = childrenInfo[i];
+      final RenderBox currentChild = info.child;
+      final OverflowViewParentData childParentData =
+          currentChild.parentData as OverflowViewParentData;
+
+      currentChild.layout(childConstraints, parentUsesSize: true);
+
+      final double childMainSize = _getMainSize(currentChild);
+
+      if (childMainSize <= availableExtent) {
+        // We have room to paint this child - add to end of list (reverse order)
+        visibleChildren.add(currentChild);
+        childParentData.offstage = false;
+
+        final double childStride = spacing + childMainSize;
+        availableExtent -= childStride;
+        unRenderedChildCount--;
+      } else {
+        // We have no room to paint any further child.
+        childParentData.offstage = true;
+        showOverflowIndicator = true;
+      }
+    }
+
+    double offset = 0;
+    if (showOverflowIndicator) {
+      // We didn't layout all the children.
+      final RenderBox overflowIndicator = lastChild!;
+      final BoxValueConstraints<int> overflowIndicatorConstraints =
+          BoxValueConstraints<int>(
+        value: unRenderedChildCount,
+        constraints: childConstraints,
+      );
+      overflowIndicator.layout(
+        overflowIndicatorConstraints,
+        parentUsesSize: true,
+      );
+
+      final double overflowIndicatorMainSize = _getMainSize(overflowIndicator);
+
+      // We need to remove children from the end (which are at start in visual order)
+      while (overflowIndicatorMainSize > availableExtent &&
+          visibleChildren.isNotEmpty) {
+        final RenderBox removedChild = visibleChildren.removeLast();
+        final OverflowViewParentData childParentData =
+            removedChild.parentData as OverflowViewParentData;
+        childParentData.offstage = true;
+        final double childStride = _getMainSize(removedChild) + spacing;
+
+        availableExtent += childStride;
+        unRenderedChildCount++;
+      }
+
+      if (overflowIndicatorMainSize > availableExtent) {
+        // We cannot paint any child because there is not enough space.
+        _hasOverflow = true;
+      }
+
+      if (overflowIndicatorConstraints.value != unRenderedChildCount) {
+        // The number of unrendered child changed, we have to layout the
+        // indicator another time.
+        overflowIndicator.layout(
+          BoxValueConstraints<int>(
+            value: unRenderedChildCount,
+            constraints: childConstraints,
+          ),
+          parentUsesSize: true,
+        );
+      }
+
+      // Place overflow indicator at the start
+      final OverflowViewParentData overflowIndicatorParentData =
+          overflowIndicator.parentData as OverflowViewParentData;
+      overflowIndicatorParentData.offset =
+          _isHorizontal ? Offset(0, 0) : Offset(0, 0);
+      overflowIndicatorParentData.offstage = false;
+
+      offset = overflowIndicatorMainSize + spacing;
+
+      // Position visible children (they're in reverse order, so iterate backwards)
+      for (int i = visibleChildren.length - 1; i >= 0; i--) {
+        final RenderBox visibleChild = visibleChildren[i];
+        final OverflowViewParentData childParentData =
+            visibleChild.parentData as OverflowViewParentData;
+        childParentData.offset =
+            _isHorizontal ? Offset(offset, 0) : Offset(0, offset);
+        offset += _getMainSize(visibleChild) + spacing;
+      }
+
+      offset -= spacing;
+    } else {
+      // We layout all children. We need to layout the overflowIndicator
+      // because we may have already laid it out with parentUsesSize: true before.
+      lastChild?.layout(BoxValueConstraints<int>(
+        value: 0,
+        constraints: childConstraints,
+      ));
+
+      // Because the overflow indicator will be paint outside of the screen,
+      // we need to say that there is an overflow.
+      _hasOverflow = true;
+
+      // Position all children (they're in reverse order)
+      for (int i = visibleChildren.length - 1; i >= 0; i--) {
+        final RenderBox visibleChild = visibleChildren[i];
+        final OverflowViewParentData childParentData =
+            visibleChild.parentData as OverflowViewParentData;
+        childParentData.offset =
+            _isHorizontal ? Offset(offset, 0) : Offset(0, offset);
+        offset += _getMainSize(visibleChild) + spacing;
+      }
+
+      if (visibleChildren.isNotEmpty) {
+        offset -= spacing;
+      }
+    }
+
+    // Calculate cross size from all visible children and overflow indicator
+    double crossSize = 0;
+    if (showOverflowIndicator) {
+      crossSize = _getCrossSize(lastChild!);
+    }
+    for (int i = visibleChildren.length - 1; i >= 0; i--) {
+      crossSize = math.max(crossSize, _getCrossSize(visibleChildren[i]));
+    }
+
+    // Center all visible children in the cross-axis
+    if (showOverflowIndicator) {
+      final OverflowViewParentData overflowParentData =
+          lastChild!.parentData as OverflowViewParentData;
+      final double childCrossPosition =
+          crossSize / 2.0 - _getCrossSize(lastChild!) / 2.0;
+      overflowParentData.offset = _isHorizontal
+          ? Offset(overflowParentData.offset.dx, childCrossPosition)
+          : Offset(childCrossPosition, overflowParentData.offset.dy);
+    }
+
+    for (int i = visibleChildren.length - 1; i >= 0; i--) {
+      final RenderBox visibleChild = visibleChildren[i];
+      final OverflowViewParentData childParentData =
+          visibleChild.parentData as OverflowViewParentData;
+      final double childCrossPosition =
+          crossSize / 2.0 - _getCrossSize(visibleChild) / 2.0;
+      childParentData.offset = _isHorizontal
+          ? Offset(childParentData.offset.dx, childCrossPosition)
+          : Offset(childCrossPosition, childParentData.offset.dy);
+    }
+
+    Size idealSize;
+    if (_isHorizontal) {
+      idealSize = Size(offset, crossSize);
+    } else {
+      idealSize = Size(crossSize, offset);
+    }
+
+    size = constraints.constrain(idealSize);
+  }
+
   void visitOnlyOnStageChildren(RenderObjectVisitor visitor) {
     visitChildren((child) {
       if (child.isOnstage) {
@@ -391,6 +644,14 @@ class RenderOverflowView extends RenderBox
 
     return false;
   }
+}
+
+/// Helper class to store child layout information
+class _ChildLayoutInfo {
+  _ChildLayoutInfo(this.child, this.index);
+
+  final RenderBox child;
+  final int index;
 }
 
 extension on Size {

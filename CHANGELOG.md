@@ -1,8 +1,17 @@
+## 0.6.0
+### Added
+* `reverse` parameter to `OverflowView` and `OverflowView.flexible` constructors.
+  * When `reverse` is `true`, overflow occurs from the start (left for horizontal, top for vertical) instead of the end.
+  * Enables right-to-left and bottom-to-top overflow behavior.
+
+### Changed
+* Optimized reverse layout performance to match normal mode efficiency (O(k) for fixed, O(n) for flexible).
+
 ## 0.5.0
 ### Changed
 * Update Flutter constraints.
 * Update version of value_layout_builder.
-  
+
 ### Fixed
 * Flutter 3.32 breaking changes issue.
 
